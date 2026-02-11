@@ -3,6 +3,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 from datetime import datetime, timedelta
+import time
 
 # --- CONFIGURATION ---
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -38,7 +39,17 @@ def update_cell(sheet, row, col, value):
 
 # --- MAIN APP ---
 def main():
-    st.set_page_config(page_title="Mentor Tracker", page_icon="Pg", layout="centered")
+    st.set_page_config(page_title="Mentor Tracker", page_icon="🧭", layout="centered")
+    
+    # Custom CSS to make the "Add" section pop and buttons look better
+    st.markdown("""
+        <style>
+        .stButton button { width: 100%; border-radius: 8px; }
+        /* Style the expander header to be more visible */
+        .streamlit-expanderHeader { font-weight: bold; font-size: 1.1rem; }
+        </style>
+    """, unsafe_allow_html=True)
+
     st.title("🧭 Mentor Tracker")
 
     # 1. CONNECT TO GOOGLE SHEETS
@@ -51,14 +62,18 @@ def main():
         st.error(f"Could not connect to sheet: {e}")
         st.stop()
 
-    # --- SIDEBAR: ADD NEW MISSIONARY ---
-    with st.sidebar:
-        st.header("➕ Add Missionary")
+    # --- SECTION: ADD MISSIONARY (High Visibility) ---
+    # Moved from sidebar to main page for better visibility
+    with st.expander("➕ Add New Missionary (Tap to Open)", expanded=False):
+        st.info("Enter details below to start tracking a new missionary.")
         with st.form("add_missionary_form"):
-            new_name = st.text_input("Name")
-            new_report_day = st.selectbox("Report Day", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
-            new_last_session = st.date_input("Last Session Date", datetime.now())
-            new_chat_link = st.text_input("Chat Link (URL)")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                new_name = st.text_input("Name")
+                new_report_day = st.selectbox("Report Day", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
+            with col_b:
+                new_last_session = st.date_input("Last Session Date", datetime.now())
+                new_chat_link = st.text_input("Chat Link (URL)")
             
             submitted = st.form_submit_button("Add to Tracker")
             if submitted and new_name:
@@ -73,24 +88,26 @@ def main():
                 ]
                 sheet.append_row(new_row)
                 st.success(f"Added {new_name}!")
+                time.sleep(1) # Brief pause so user sees the success message
                 st.rerun()
 
+    # --- SECTION: ALERTS ---
     if df.empty:
-        st.info("No missionaries found. Use the sidebar to add one.")
+        st.warning("No missionaries found. Add one above!")
         st.stop()
 
-    # 2. CALCULATE ALERTS (The "Brain" of the app)
+    # Date Calculations
     today = datetime.now().date()
     yesterday_weekday = (today.weekday() - 1) % 7
     
     alerts = []
 
+    # Calculate Alerts Loop
     for i, row in df.iterrows():
         name = row['Name']
         last_session_str = str(row['Last_Session_Date'])
         report_day_str = str(row['Report_Day'])
         
-        # Checkbox States
         p1_done = str(row['P1_Sent_Encouragement']).upper() == 'TRUE'
         p2_done = str(row['P2_Received_Report']).upper() == 'TRUE'
         p3_done = str(row['P3_Sent_Prework']).upper() == 'TRUE'
@@ -99,7 +116,7 @@ def main():
             last_session = datetime.strptime(last_session_str, "%Y-%m-%d").date()
             next_session = last_session + timedelta(days=7)
         except ValueError:
-            continue # Skip invalid dates
+            continue 
 
         # ALERT 1: Day After Session (Encouragement)
         if (today - last_session).days == 1 and not p1_done:
@@ -114,7 +131,7 @@ def main():
         if (next_session - today).days == 1 and not p3_done:
             alerts.append(f"📚 **{name}**: Session is tomorrow. Send Pre-Work.")
 
-    # 3. DISPLAY ALERTS
+    # Display Alerts
     if alerts:
         st.error("### 🚨 Action Items")
         for alert in alerts:
@@ -124,11 +141,10 @@ def main():
         st.success("✅ All caught up!")
         st.markdown("---")
 
-    # 4. MISSIONARY CARDS (View & Edit)
+    # --- SECTION: MISSIONARY LIST ---
     st.subheader("Missionaries")
 
     for i, row in df.iterrows():
-        # Google Sheets is 1-indexed, row 1 is header, so data starts at row 2
         sheet_row = i + 2
         
         name = row['Name']
@@ -136,40 +152,32 @@ def main():
         report_day = row['Report_Day']
         chat_link = row['Chat_Link']
         
-        # Card UI
+        # UI Card
         with st.expander(f"**{name}**", expanded=False):
             
-            # --- TAB 1: ACTIONS (Checkboxes) ---
+            # --- ACTIONS TAB ---
             c1, c2 = st.columns([3, 1])
             with c1:
                 # P1
                 p1_val = str(row['P1_Sent_Encouragement']).upper() == 'TRUE'
                 if st.checkbox("1. Encouragement Sent", value=p1_val, key=f"p1_{i}"):
-                    if not p1_val: 
-                        update_cell(sheet, sheet_row, 5, "TRUE")
-                        st.rerun()
-                elif p1_val:
-                    update_cell(sheet, sheet_row, 5, "FALSE")
+                    # Toggle logic
+                    new_val = "FALSE" if p1_val else "TRUE"
+                    update_cell(sheet, sheet_row, 5, new_val)
                     st.rerun()
 
                 # P2
                 p2_val = str(row['P2_Received_Report']).upper() == 'TRUE'
                 if st.checkbox(f"2. Received Report ({report_day})", value=p2_val, key=f"p2_{i}"):
-                    if not p2_val:
-                        update_cell(sheet, sheet_row, 6, "TRUE")
-                        st.rerun()
-                elif p2_val:
-                    update_cell(sheet, sheet_row, 6, "FALSE")
+                    new_val = "FALSE" if p2_val else "TRUE"
+                    update_cell(sheet, sheet_row, 6, new_val)
                     st.rerun()
 
                 # P3
                 p3_val = str(row['P3_Sent_Prework']).upper() == 'TRUE'
                 if st.checkbox("3. Pre-Work Sent", value=p3_val, key=f"p3_{i}"):
-                    if not p3_val:
-                        update_cell(sheet, sheet_row, 7, "TRUE")
-                        st.rerun()
-                elif p3_val:
-                    update_cell(sheet, sheet_row, 7, "FALSE")
+                    new_val = "FALSE" if p3_val else "TRUE"
+                    update_cell(sheet, sheet_row, 7, new_val)
                     st.rerun()
 
             with c2:
@@ -178,13 +186,13 @@ def main():
 
             st.markdown("---")
             
-            # --- TAB 2: EDIT DETAILS (Collapsible Form) ---
-            with st.expander("✏️ Edit Details"):
+            # --- EDIT & DELETE SECTION ---
+            with st.expander("✏️ Edit or Delete"):
+                # Edit Form
                 with st.form(key=f"edit_form_{i}"):
-                    # Pre-fill form with current data
+                    st.caption("Edit Details")
                     edit_name = st.text_input("Name", value=name)
                     
-                    # Handle Date Conversion for Input
                     try:
                         date_obj = datetime.strptime(last_session_str, "%Y-%m-%d").date()
                     except:
@@ -194,23 +202,25 @@ def main():
                     edit_day = st.selectbox("Report Day", 
                                           ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
                                           index=get_day_number(report_day) if get_day_number(report_day) != -1 else 0)
-                    
                     edit_link = st.text_input("Chat Link", value=chat_link)
                     
-                    # Save Button
                     if st.form_submit_button("💾 Save Changes"):
-                        # Update specific cells in Google Sheet
-                        # Name=Col1, Chat=Col2, Date=Col3, ReportDay=Col4
                         sheet.update_cell(sheet_row, 1, edit_name)
                         sheet.update_cell(sheet_row, 2, edit_link)
                         sheet.update_cell(sheet_row, 3, str(edit_date))
                         sheet.update_cell(sheet_row, 4, edit_day)
-                        
-                        # Optional: Reset checkboxes if date changed? 
-                        # For now, we leave them as is to prevent accidental data loss.
-                        
                         st.success("Updated!")
                         st.rerun()
+                
+                # DELETE BUTTON
+                st.markdown("---")
+                st.caption("Danger Zone")
+                # We use a unique key for every button so Streamlit doesn't get confused
+                if st.button(f"🗑️ Delete {name}", key=f"del_{i}", type="primary"):
+                    sheet.delete_rows(sheet_row)
+                    st.warning(f"Deleted {name}.")
+                    time.sleep(1)
+                    st.rerun()
 
 if __name__ == "__main__":
     main()
