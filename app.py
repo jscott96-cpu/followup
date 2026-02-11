@@ -6,12 +6,11 @@ from datetime import datetime, timedelta
 
 # --- CONFIGURATION ---
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-SHEET_NAME = "Missionary_Tracker"  # Ensure this matches your Google Sheet exactly
+SHEET_NAME = "Missionary_Tracker"
 
 # --- AUTHENTICATION ---
 def get_google_sheet_client():
     try:
-        # Load credentials from Streamlit secrets
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
         client = gspread.authorize(creds)
@@ -20,164 +19,132 @@ def get_google_sheet_client():
         st.error(f"Authentication Error: {e}")
         st.stop()
 
-# --- HELPER FUNCTIONS ---
-def get_day_index(day_name):
-    """Converts 'Monday' to 0, 'Sunday' to 6."""
-    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-    try:
-        return days.index(day_name.strip().title())
-    except ValueError:
-        return -1 # Invalid day name
+# --- HELPER: CONVERT DAY NAME TO NUMBER ---
+def get_day_number(day_name):
+    """Returns 0=Monday, 6=Sunday. Returns -1 if invalid."""
+    days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+    clean = str(day_name).strip().lower()
+    if clean in days:
+        return days.index(clean)
+    return -1
 
-def update_sheet(row_idx, col_idx, value, sheet):
-    """Updates a specific cell in the Google Sheet."""
-    try:
-        sheet.update_cell(row_idx, col_idx, value)
-        st.toast("Saved to Google Sheets! ☁️")
-    except Exception as e:
-        st.error(f"Failed to update sheet: {e}")
-
-# --- MAIN APP LOGIC ---
+# --- MAIN APP ---
 def main():
     st.set_page_config(page_title="Mentor Tracker", page_icon="🧭", layout="centered")
-    
-    # Custom CSS for mobile friendliness
-    st.markdown("""
-        <style>
-        .stButton button { width: 100%; border-radius: 8px; }
-        .stExpander { border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 10px; }
-        </style>
-    """, unsafe_allow_html=True)
-
     st.title("🧭 Mentor Tracker")
 
-    # 1. Connect and Load Data
+    # 1. Load Data
     client = get_google_sheet_client()
     try:
         sheet = client.open(SHEET_NAME).sheet1
         data = sheet.get_all_records()
         df = pd.DataFrame(data)
     except Exception as e:
-        st.error(f"Could not load '{SHEET_NAME}'. Check your Google Sheet name and permissions.")
+        st.error(f"Could not load sheet: {SHEET_NAME}. Error: {e}")
         st.stop()
 
     if df.empty:
-        st.info("Your Google Sheet is empty.")
+        st.info("Sheet is empty.")
         st.stop()
 
-    # 2. Global Date Calculations
+    # 2. Global Date Variables
     today = datetime.now().date()
-    today_idx = today.weekday() # 0=Mon, 6=Sun
+    today_weekday = today.weekday() # 0=Mon, 6=Sun
+    yesterday_weekday = (today_weekday - 1) % 7 # Logic for "Day After Report"
 
-    # 3. DASHBOARD: "Action Required" (Top Section)
-    st.subheader("🚨 Needs Attention")
-    
+    # 3. 🚨 CALCULATE ALERTS
     alerts = []
-    
+
     for i, row in df.iterrows():
         name = row['Name']
         last_session_str = str(row['Last_Session_Date'])
         report_day_str = str(row['Report_Day'])
         
-        # Parse Dates
-        try:
-            last_session = datetime.strptime(last_session_str, "%Y-%m-%d").date()
-            next_session = last_session + timedelta(days=7) # Assuming weekly cadence
-        except ValueError:
-            continue # Skip invalid dates
-            
-        # Status Flags
+        # Checkbox States (True/False)
         p1_done = str(row['P1_Sent_Encouragement']).upper() == 'TRUE'
         p2_done = str(row['P2_Received_Report']).upper() == 'TRUE'
         p3_done = str(row['P3_Sent_Prework']).upper() == 'TRUE'
 
-        # --- LOGIC: GENERATE ALERTS ---
-        
-        # Alert 1: Day After Session (Send Encouragement)
-        if not p1_done and (today - last_session).days == 1:
-            alerts.append(f"✨ **{name}**: Send encouragement (Day After Session)")
-            
-        # Alert 2: Late Report (Mid-Week)
-        rep_idx = get_day_index(report_day_str)
-        if not p2_done and rep_idx != -1:
-            # If today is AFTER their report day, it is overdue
-            if today_idx > rep_idx: 
-                alerts.append(f"⚠️ **{name}**: Missed {report_day_str} Report!")
-            # If today IS their report day
-            elif today_idx == rep_idx:
-                alerts.append(f"🕒 **{name}**: Report due today ({report_day_str})")
+        # Parse Date
+        try:
+            last_session = datetime.strptime(last_session_str, "%Y-%m-%d").date()
+            # Assume Weekly Cadence
+            next_session = last_session + timedelta(days=7)
+        except ValueError:
+            continue # Skip invalid dates
 
-        # Alert 3: Day Before Next Session (Pre-Work)
-        if not p3_done and (next_session - today).days == 1:
-            alerts.append(f"📚 **{name}**: Check Pre-Work (Session Tomorrow)")
+        # --- CONDITION 1: P1 (Day After Session) ---
+        # "I haven't sent out the p1 reminder the day after the completed session"
+        days_since_session = (today - last_session).days
+        if days_since_session == 1 and not p1_done:
+            alerts.append(f"✉️ **{name}**: Session was yesterday. Send encouragement!")
 
-    # Render Alerts
+        # --- CONDITION 2: P2 (Report Late) ---
+        # "It is the day after they said they would share their report and they haven't"
+        report_day_idx = get_day_number(report_day_str)
+        if report_day_idx == yesterday_weekday and not p2_done:
+             alerts.append(f"⚠️ **{name}**: Missed {report_day_str} report (Due Yesterday).")
+
+        # --- CONDITION 3: P3 (Pre-Work) ---
+        # "I haven't sent out the prework follow up the day before our next session"
+        days_until_next = (next_session - today).days
+        if days_until_next == 1 and not p3_done:
+            alerts.append(f"📚 **{name}**: Session is tomorrow. Send Pre-Work check.")
+
+    # 4. DISPLAY ALERTS
     if alerts:
+        st.error("### 🚨 Action Items")
         for alert in alerts:
-            st.warning(alert, icon="🔔")
+            st.write(alert)
+        st.markdown("---")
     else:
-        st.success("All caught up! No urgent tasks.", icon="✅")
+        st.success("✅ No urgent alerts today!")
+        st.markdown("---")
 
-    st.markdown("---")
-
-    # 4. MISSIONARY CARDS
-    st.subheader("Your Missionaries")
-
-    # We use index+2 for GSheets (1-based index + header row)
+    # 5. MISSIONARY CARDS (Checkboxes)
     for i, row in df.iterrows():
-        sheet_row_num = i + 2 
+        sheet_row = i + 2
         name = row['Name']
-        last_session_str = row['Last_Session_Date']
-        report_day = row['Report_Day']
         chat_link = row['Chat_Link']
         
-        # State Variables
+        # Current Values
         p1_val = str(row['P1_Sent_Encouragement']).upper() == 'TRUE'
         p2_val = str(row['P2_Received_Report']).upper() == 'TRUE'
         p3_val = str(row['P3_Sent_Prework']).upper() == 'TRUE'
-        
-        # Card UI
+
         with st.expander(f"**{name}**", expanded=False):
-            c1, c2 = st.columns([2, 1])
-            
+            c1, c2 = st.columns([3, 1])
             with c1:
-                st.caption(f"Last Session: {last_session_str}")
-                st.caption(f"Report Day: {report_day}")
-                
+                # P1
+                if st.checkbox("1. Encouragement Sent", value=p1_val, key=f"p1_{i}"):
+                    if not p1_val: # Changed to True
+                        sheet.update_cell(sheet_row, 5, "TRUE")
+                        st.rerun()
+                elif p1_val: # Changed to False
+                     sheet.update_cell(sheet_row, 5, "FALSE")
+                     st.rerun()
+
+                # P2
+                if st.checkbox("2. Report Received", value=p2_val, key=f"p2_{i}"):
+                    if not p2_val:
+                        sheet.update_cell(sheet_row, 6, "TRUE")
+                        st.rerun()
+                elif p2_val:
+                     sheet.update_cell(sheet_row, 6, "FALSE")
+                     st.rerun()
+
+                # P3
+                if st.checkbox("3. Pre-Work Sent", value=p3_val, key=f"p3_{i}"):
+                    if not p3_val:
+                        sheet.update_cell(sheet_row, 7, "TRUE")
+                        st.rerun()
+                elif p3_val:
+                     sheet.update_cell(sheet_row, 7, "FALSE")
+                     st.rerun()
+            
             with c2:
                 if chat_link:
                     st.link_button("💬 Chat", chat_link)
-            
-            st.divider()
-
-            # --- CHECKBOXES WITH AUTO-SAVE ---
-            
-            # Point 1
-            if st.checkbox("1. Sent Encouragement", value=p1_val, key=f"p1_{i}"):
-                if not p1_val: # If it changed from False to True
-                    update_sheet(sheet_row_num, 5, "TRUE", sheet)
-                    st.rerun()
-            elif p1_val: # If it changed from True to False
-                update_sheet(sheet_row_num, 5, "FALSE", sheet)
-                st.rerun()
-
-            # Point 2
-            if st.checkbox(f"2. Received Report ({report_day})", value=p2_val, key=f"p2_{i}"):
-                 if not p2_val:
-                    update_sheet(sheet_row_num, 6, "TRUE", sheet)
-                    st.rerun()
-            elif p2_val:
-                update_sheet(sheet_row_num, 6, "FALSE", sheet)
-                st.rerun()
-                
-            # Point 3
-            if st.checkbox("3. Sent Pre-Work Check", value=p3_val, key=f"p3_{i}"):
-                 if not p3_val:
-                    update_sheet(sheet_row_num, 7, "TRUE", sheet)
-                    st.rerun()
-            elif p3_val:
-                update_sheet(sheet_row_num, 7, "FALSE", sheet)
-                st.rerun()
 
 if __name__ == "__main__":
     main()
