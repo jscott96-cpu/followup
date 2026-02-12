@@ -235,7 +235,7 @@ def main():
                             st.cache_data.clear()
                             st.rerun()
 
-    # --- TAB 2: HISTORY (NEW) ---
+    # --- TAB 2: HISTORY ---
     with tab_history:
         st.header("📈 History & Trends")
         
@@ -243,12 +243,11 @@ def main():
             dfh = st.session_state.df_hist
             
             # 1. Clean Data (Convert to Booleans)
-            # We map "TRUE" strings to Python True
             dfh['Encouragement'] = dfh['P1_Encouragement'].astype(str).str.upper() == 'TRUE'
             dfh['Report'] = dfh['P2_Report'].astype(str).str.upper() == 'TRUE'
             dfh['Prework'] = dfh['P3_Prework'].astype(str).str.upper() == 'TRUE'
             
-            # 2. Reshape Data for Charting (Melt)
+            # 2. Reshape Data
             chart_data = dfh.melt(
                 id_vars=['Name', 'Date_Logged'], 
                 value_vars=['Encouragement', 'Report', 'Prework'], 
@@ -256,20 +255,27 @@ def main():
                 value_name='Completed'
             )
             
-            # 3. Calculate % Completion for each Task type per Person
+            # 3. Calculate %
             agg_data = chart_data.groupby(['Name', 'Task'])['Completed'].mean().reset_index()
             
-            # 4. Create Grouped Bar Chart
+            # 4. Create Grouped Bar Chart with CUSTOM COLORS
             c = alt.Chart(agg_data).mark_bar().encode(
-                x=alt.X('Task', axis=None), # We hide x-axis text to avoid clutter
+                x=alt.X('Task', axis=None), 
                 y=alt.Y('Completed', axis=alt.Axis(format='%', title='Completion Rate')),
-                color=alt.Color('Task', legend=alt.Legend(title="Task Type", orient="bottom")),
+                
+                # --- COLOR CHANGE IS HERE ---
+                color=alt.Color('Task', 
+                    # Define manual color range: Blue, Green, Orange
+                    scale=alt.Scale(range=['#3182bd', '#e6550d', '#31a354']), 
+                    legend=alt.Legend(title="Task Type", orient="bottom")
+                ),
+                
                 column=alt.Column('Name', header=alt.Header(titleOrient="bottom", labelOrient="bottom")),
                 tooltip=['Name', 'Task', alt.Tooltip('Completed', format='.0%')]
             ).properties(
-                height=300 # Height of the bars
+                height=300 
             ).configure_view(
-                stroke='transparent' # Remove border boxes
+                stroke='transparent' 
             )
             
             st.altair_chart(c)
