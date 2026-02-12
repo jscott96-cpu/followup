@@ -180,4 +180,125 @@ def main():
 
                 # Alert 1: Encouragement (Due: Last + 1)
                 if not p1 and today >= (last_sess + timedelta(days=1)):
-                    alerts.append(f"✉️ **{name}**: Encour
+                    alerts.append(f"✉️ **{name}**: Encouragement needed")
+
+                # Alert 2: Report (Due: Specific Day)
+                sess_wd = last_sess.weekday()
+                rep_wd = get_day_number(row['Report_Day'])
+                days_until = (rep_wd - sess_wd) % 7
+                if days_until == 0: days_until = 7
+                report_due = last_sess + timedelta(days=days_until)
+                
+                # We alert if TODAY > Due Date
+                if not p2 and today > report_due:
+                    alerts.append(f"⚠️ **{name}**: Report overdue (Due {report_due.strftime('%A')})")
+
+                # Alert 3: Pre-Work (Due: Next - 1)
+                if not p3 and today >= (next_sess - timedelta(days=1)):
+                    alerts.append(f"📚 **{name}**: Send Pre-Work (Session {next_sess})")
+
+        if alerts:
+            st.error("### 🚨 Action Items")
+            for a in alerts: st.write(a)
+        else:
+            st.success("✅ All caught up!")
+        
+        st.markdown("---")
+
+        # CARDS
+        if not st.session_state.df.empty:
+            for i, row in st.session_state.df.iterrows():
+                name = row['Name']
+                
+                with st.expander(f"**{name}**", expanded=False):
+                    c1, c2 = st.columns([3, 1])
+                    
+                    with c1:
+                        # P1 Checkbox
+                        val_p1 = str(row['P1_Sent_Encouragement']).upper() == 'TRUE'
+                        st.checkbox("1. Encouragement Sent", value=val_p1, key=f"p1_{i}", 
+                                    on_change=toggle_status, args=(i, 'P1_Sent_Encouragement', 6))
+
+                        # P2 Checkbox
+                        val_p2 = str(row['P2_Received_Report']).upper() == 'TRUE'
+                        st.checkbox(f"2. Received Report ({row['Report_Day']})", value=val_p2, key=f"p2_{i}", 
+                                    on_change=toggle_status, args=(i, 'P2_Received_Report', 7))
+
+                        # P3 Checkbox
+                        val_p3 = str(row['P3_Sent_Prework']).upper() == 'TRUE'
+                        st.checkbox("3. Pre-Work Sent", value=val_p3, key=f"p3_{i}", 
+                                    on_change=toggle_status, args=(i, 'P3_Sent_Prework', 8))
+                    
+                    with c2:
+                        if row['Chat_Link']:
+                            st.link_button("Chat", row['Chat_Link'])
+                    
+                    st.markdown("---")
+                    
+                    # LOGGING
+                    with st.popover("🔄 Finish Cycle"):
+                        st.caption("Log history & reset checkboxes")
+                        try: d_def = datetime.strptime(str(row['Next_Session_Date']), "%Y-%m-%d").date()
+                        except: d_def = datetime.now().date()
+                        
+                        nl = st.date_input("New 'Last Session'", value=d_def, key=f"nl_{i}")
+                        nn = st.date_input("New 'Next Session'", value=d_def + timedelta(days=7), key=f"nn_{i}")
+                        
+                        if st.button("✅ Log & Reset", key=f"lr_{i}", type="primary"):
+                            log_and_reset(i, name, val_p1, val_p2, val_p3, nl, nn)
+                            st.rerun()
+
+                    # EDITING
+                    with st.expander("✏️ Edit Details"):
+                        with st.form(f"edit_{i}"):
+                            e_name = st.text_input("Name", value=name)
+                            e_link = st.text_input("Link", value=row['Chat_Link'])
+                            
+                            try: dl = datetime.strptime(str(row['Last_Session_Date']), "%Y-%m-%d").date()
+                            except: dl = datetime.now().date()
+                            try: dn = datetime.strptime(str(row['Next_Session_Date']), "%Y-%m-%d").date()
+                            except: dn = datetime.now().date()
+                            
+                            el = st.date_input("Last Session", value=dl)
+                            en = st.date_input("Next Session", value=dn)
+                            er = st.selectbox("Report Day", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"], 
+                                              index=get_day_number(row['Report_Day']))
+                            
+                            if st.form_submit_button("Save Edits"):
+                                update_missionary_details(i, e_name, e_link, el, en, er)
+                                st.rerun()
+                                
+                        if st.button("🗑️ Delete User", key=f"del_{i}"):
+                            client = get_google_client()
+                            ws = client.open(SHEET_NAME).sheet1
+                            ws.delete_rows(i + 2)
+                            if 'df' in st.session_state: del st.session_state['df']
+                            st.cache_data.clear()
+                            st.rerun()
+
+    # ==========================
+    # TAB 2: HISTORY
+    # ==========================
+    with tab_history:
+        st.header("📈 History & Trends")
+        if not st.session_state.df_hist.empty:
+            dfh = st.session_state.df_hist
+            dfh['P2_Bool'] = dfh['P2_Report'].astype(str).str.upper() == 'TRUE'
+            
+            # Chart
+            chart_data = dfh.groupby("Name")['P2_Bool'].mean().reset_index()
+            chart_data['%'] = chart_data['P2_Bool'] * 100
+            
+            c = alt.Chart(chart_data).mark_bar().encode(
+                x=alt.X('Name', sort=None),
+                y=alt.Y('%', title='Completion Rate'),
+                tooltip=['Name', '%']
+            ).properties(height=300)
+            st.altair_chart(c, use_container_width=True)
+            
+            st.dataframe(dfh)
+        else:
+            st.info("No history logs found.")
+
+if __name__ == "__main__":
+    main()
