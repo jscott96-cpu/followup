@@ -43,20 +43,12 @@ def load_data_from_cloud():
     except Exception as e:
         return pd.DataFrame(), pd.DataFrame()
 
-# --- CALLBACKS (Logic to keep cards open) ---
+# --- CALLBACKS ---
 def toggle_status(idx, col_name, sheet_col_idx):
-    """
-    Updates Local State and sets the 'active_index' so the card stays open.
-    """
-    # 1. Remember this card is active
     st.session_state['active_index'] = idx
-    
-    # 2. Update Local State
     current_val = str(st.session_state.df.at[idx, col_name]).upper()
     new_val = "FALSE" if current_val == "TRUE" else "TRUE"
     st.session_state.df.at[idx, col_name] = new_val
-    
-    # 3. Sync to Google
     try:
         client = get_google_client()
         sheet = client.open(SHEET_NAME).sheet1
@@ -65,17 +57,12 @@ def toggle_status(idx, col_name, sheet_col_idx):
         st.toast(f"⚠️ Cloud sync paused: {e}")
 
 def update_missionary_details(idx, new_name, new_link, new_last, new_next, new_rep):
-    # Remember this card
     st.session_state['active_index'] = idx
-    
-    # Update Local
     st.session_state.df.at[idx, 'Name'] = new_name
     st.session_state.df.at[idx, 'Chat_Link'] = new_link
     st.session_state.df.at[idx, 'Last_Session_Date'] = str(new_last)
     st.session_state.df.at[idx, 'Next_Session_Date'] = str(new_next)
     st.session_state.df.at[idx, 'Report_Day'] = new_rep
-    
-    # Update Cloud
     try:
         client = get_google_client()
         ws = client.open(SHEET_NAME).sheet1
@@ -90,10 +77,7 @@ def update_missionary_details(idx, new_name, new_link, new_last, new_next, new_r
         st.error("Failed to sync details.")
 
 def log_and_reset(idx, name, p1, p2, p3, new_last, new_next):
-    # Logic: When we finish a cycle, we usually WANT the card to close.
-    # So we reset the active_index to None.
     st.session_state['active_index'] = None
-    
     client = get_google_client()
     main_sheet = client.open(SHEET_NAME).sheet1
     hist_sheet = client.open(SHEET_NAME).worksheet(HISTORY_TAB_NAME)
@@ -107,7 +91,6 @@ def log_and_reset(idx, name, p1, p2, p3, new_last, new_next):
     main_sheet.update_cell(r, 6, "FALSE")
     main_sheet.update_cell(r, 7, "FALSE")
     main_sheet.update_cell(r, 8, "FALSE")
-    
     st.cache_data.clear()
 
 def get_day_number(day_name):
@@ -120,13 +103,11 @@ def main():
     st.set_page_config(page_title="Mentor Tracker", page_icon="Pg", layout="centered")
     st.title("🧭 Mentor Tracker")
 
-    # Initialize Session State
     if 'df' not in st.session_state:
         df, df_hist = load_data_from_cloud()
         st.session_state.df = df
         st.session_state.df_hist = df_hist
     
-    # Initialize 'active_index' if it doesn't exist
     if 'active_index' not in st.session_state:
         st.session_state['active_index'] = None
 
@@ -141,8 +122,6 @@ def main():
 
     # --- TAB 1: TRACKER ---
     with tab_tracker:
-        
-        # Add Missionary (Always collapsed by default)
         with st.expander("➕ Add New Missionary"):
             with st.form("add"):
                 c1, c2 = st.columns(2)
@@ -161,7 +140,6 @@ def main():
                     if 'df' in st.session_state: del st.session_state['df']
                     st.rerun()
 
-        # Alerts Engine
         today = datetime.now().date()
         alerts = []
         if not st.session_state.df.empty:
@@ -198,29 +176,22 @@ def main():
             st.success("✅ All caught up!")
         st.markdown("---")
 
-        # Cards Loop
         if not st.session_state.df.empty:
             for i, row in st.session_state.df.iterrows():
                 name = row['Name']
-                
-                # --- AUTO-EXPAND LOGIC ---
-                # Check if this index matches the one stored in session_state
                 is_expanded = (i == st.session_state['active_index'])
                 
                 with st.expander(f"**{name}**", expanded=is_expanded):
                     c1, c2 = st.columns([3, 1])
                     with c1:
-                        # P1
                         val_p1 = str(row['P1_Sent_Encouragement']).upper() == 'TRUE'
                         st.checkbox("1. Encouragement Sent", value=val_p1, key=f"p1_{i}", 
                                     on_change=toggle_status, args=(i, 'P1_Sent_Encouragement', 6))
 
-                        # P2
                         val_p2 = str(row['P2_Received_Report']).upper() == 'TRUE'
                         st.checkbox(f"2. Received Report ({row['Report_Day']})", value=val_p2, key=f"p2_{i}", 
                                     on_change=toggle_status, args=(i, 'P2_Received_Report', 7))
 
-                        # P3
                         val_p3 = str(row['P3_Sent_Prework']).upper() == 'TRUE'
                         st.checkbox("3. Pre-Work Sent", value=val_p3, key=f"p3_{i}", 
                                     on_change=toggle_status, args=(i, 'P3_Sent_Prework', 8))
@@ -231,20 +202,16 @@ def main():
                     
                     st.markdown("---")
                     
-                    # Log Cycle
                     with st.popover("🔄 Finish Cycle"):
                         st.caption("Log history & reset checkboxes")
                         try: d_def = datetime.strptime(str(row['Next_Session_Date']), "%Y-%m-%d").date()
                         except: d_def = datetime.now().date()
-                        
                         nl = st.date_input("New 'Last Session'", value=d_def, key=f"nl_{i}")
                         nn = st.date_input("New 'Next Session'", value=d_def + timedelta(days=7), key=f"nn_{i}")
-                        
                         if st.button("✅ Log & Reset", key=f"lr_{i}", type="primary"):
                             log_and_reset(i, name, val_p1, val_p2, val_p3, nl, nn)
                             st.rerun()
 
-                    # Edit Details
                     with st.expander("✏️ Edit Details"):
                         with st.form(f"edit_{i}"):
                             e_name = st.text_input("Name", value=name)
@@ -257,11 +224,9 @@ def main():
                             en = st.date_input("Next Session", value=dn)
                             er = st.selectbox("Report Day", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"], 
                                               index=get_day_number(row['Report_Day']))
-                            
                             if st.form_submit_button("Save Edits"):
                                 update_missionary_details(i, e_name, e_link, el, en, er)
                                 st.rerun()
-                                
                         if st.button("🗑️ Delete User", key=f"del_{i}"):
                             client = get_google_client()
                             ws = client.open(SHEET_NAME).sheet1
@@ -270,24 +235,47 @@ def main():
                             st.cache_data.clear()
                             st.rerun()
 
-    # --- TAB 2: HISTORY ---
+    # --- TAB 2: HISTORY (NEW) ---
     with tab_history:
         st.header("📈 History & Trends")
+        
         if not st.session_state.df_hist.empty:
             dfh = st.session_state.df_hist
-            dfh['P2_Bool'] = dfh['P2_Report'].astype(str).str.upper() == 'TRUE'
-            chart_data = dfh.groupby("Name")['P2_Bool'].mean().reset_index()
-            chart_data['%'] = chart_data['P2_Bool'] * 100
             
-            c = alt.Chart(chart_data).mark_bar().encode(
-                x=alt.X('Name', sort=None),
-                y=alt.Y('%', title='Completion Rate'),
-                tooltip=['Name', '%']
-            ).properties(height=300)
-            st.altair_chart(c, use_container_width=True)
-            st.dataframe(dfh)
+            # 1. Clean Data (Convert to Booleans)
+            # We map "TRUE" strings to Python True
+            dfh['Encouragement'] = dfh['P1_Encouragement'].astype(str).str.upper() == 'TRUE'
+            dfh['Report'] = dfh['P2_Report'].astype(str).str.upper() == 'TRUE'
+            dfh['Prework'] = dfh['P3_Prework'].astype(str).str.upper() == 'TRUE'
+            
+            # 2. Reshape Data for Charting (Melt)
+            chart_data = dfh.melt(
+                id_vars=['Name', 'Date_Logged'], 
+                value_vars=['Encouragement', 'Report', 'Prework'], 
+                var_name='Task', 
+                value_name='Completed'
+            )
+            
+            # 3. Calculate % Completion for each Task type per Person
+            agg_data = chart_data.groupby(['Name', 'Task'])['Completed'].mean().reset_index()
+            
+            # 4. Create Grouped Bar Chart
+            c = alt.Chart(agg_data).mark_bar().encode(
+                x=alt.X('Task', axis=None), # We hide x-axis text to avoid clutter
+                y=alt.Y('Completed', axis=alt.Axis(format='%', title='Completion Rate')),
+                color=alt.Color('Task', legend=alt.Legend(title="Task Type", orient="bottom")),
+                column=alt.Column('Name', header=alt.Header(titleOrient="bottom", labelOrient="bottom")),
+                tooltip=['Name', 'Task', alt.Tooltip('Completed', format='.0%')]
+            ).properties(
+                height=300 # Height of the bars
+            ).configure_view(
+                stroke='transparent' # Remove border boxes
+            )
+            
+            st.altair_chart(c)
+            
         else:
-            st.info("No history logs found.")
+            st.info("No history logs found. Complete a cycle in the Tracker tab to see data here.")
 
 if __name__ == "__main__":
     main()
