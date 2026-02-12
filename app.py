@@ -43,7 +43,7 @@ def load_data_from_cloud():
     except Exception as e:
         return pd.DataFrame(), pd.DataFrame()
 
-# --- CALLBACKS ---
+# --- CALLBACKS & ACTIONS ---
 def toggle_status(idx, col_name, sheet_col_idx):
     st.session_state['active_index'] = idx
     current_val = str(st.session_state.df.at[idx, col_name]).upper()
@@ -77,6 +77,7 @@ def update_missionary_details(idx, new_name, new_link, new_last, new_next, new_r
         st.error("Failed to sync details.")
 
 def log_and_reset(idx, name, p1, p2, p3, new_last, new_next):
+    """Single User Reset"""
     st.session_state['active_index'] = None
     client = get_google_client()
     main_sheet = client.open(SHEET_NAME).sheet1
@@ -92,6 +93,69 @@ def log_and_reset(idx, name, p1, p2, p3, new_last, new_next):
     main_sheet.update_cell(r, 7, "FALSE")
     main_sheet.update_cell(r, 8, "FALSE")
     st.cache_data.clear()
+
+def process_universal_cycle():
+    """
+    Batch processes ALL users.
+    Rule: Only process if Today >= Next_Session_Date
+    """
+    client = get_google_client()
+    main_sheet = client.open(SHEET_NAME).sheet1
+    hist_sheet = client.open(SHEET_NAME).worksheet(HISTORY_TAB_NAME)
+    
+    today = datetime.now().date()
+    processed_count = 0
+    skipped_count = 0
+    log_rows = []
+    
+    # We iterate through the session state dataframe
+    df = st.session_state.df
+    
+    for i, row in df.iterrows():
+        name = row['Name']
+        try:
+            next_sess_date = datetime.strptime(str(row['Next_Session_Date']), "%Y-%m-%d").date()
+        except:
+            skipped_count += 1
+            continue
+
+        # --- THE SAFETY CHECK ---
+        # If today is BEFORE their next session, they haven't finished the week. SKIP.
+        if today < next_sess_date:
+            skipped_count += 1
+            continue
+            
+        # If we are here, the cycle is complete.
+        processed_count += 1
+        
+        # 1. Prepare History Log
+        p1 = str(row['P1_Sent_Encouragement'])
+        p2 = str(row['P2_Received_Report'])
+        p3 = str(row['P3_Sent_Prework'])
+        log_rows.append([str(today), name, p1, p2, p3])
+        
+        # 2. Calculate New Dates
+        # Old Next becomes New Last
+        new_last = next_sess_date
+        # New Next is +7 days from Old Next
+        new_next = next_sess_date + timedelta(days=7)
+        
+        # 3. Update Sheet (Row by Row for safety)
+        r = i + 2
+        # Update Dates
+        main_sheet.update_cell(r, 3, str(new_last))
+        main_sheet.update_cell(r, 4, str(new_next))
+        # Reset Checkboxes
+        main_sheet.update_cell(r, 6, "FALSE")
+        main_sheet.update_cell(r, 7, "FALSE")
+        main_sheet.update_cell(r, 8, "FALSE")
+    
+    # Bulk Append History (Faster)
+    if log_rows:
+        for row in log_rows:
+            hist_sheet.append_row(row)
+            
+    return processed_count, skipped_count
 
 def get_day_number(day_name):
     days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
@@ -110,6 +174,30 @@ def main():
     
     if 'active_index' not in st.session_state:
         st.session_state['active_index'] = None
+
+    # --- SIDEBAR: UNIVERSAL ACTIONS ---
+    with st.sidebar:
+        st.header("⚡ Universal Actions")
+        st.info("Use this once a week (e.g., Mondays) to process everyone at once.")
+        
+        with st.popover("🔄 Process Weekly Cycle"):
+            st.warning("**Batch Reset**")
+            st.markdown("""
+            This will check every missionary.
+            
+            **It will ONLY reset them if:**
+            \n`Today` >= `Their Next Session`
+            
+            (i.e., The week is actually over for them).
+            """)
+            
+            if st.button("🚀 Run Batch Processor", type="primary"):
+                with st.spinner("Processing..."):
+                    proc, skip = process_universal_cycle()
+                st.success(f"Done! Processed: {proc} | Skipped (Not ready): {skip}")
+                time.sleep(2)
+                st.cache_data.clear()
+                st.rerun()
 
     if st.button("🔄 Force Refresh"):
         st.cache_data.clear()
@@ -202,7 +290,8 @@ def main():
                     
                     st.markdown("---")
                     
-                    with st.popover("🔄 Finish Cycle"):
+                    # SINGLE USER RESET
+                    with st.popover("🔄 Finish Cycle (Manual)"):
                         st.caption("Log history & reset checkboxes")
                         try: d_def = datetime.strptime(str(row['Next_Session_Date']), "%Y-%m-%d").date()
                         except: d_def = datetime.now().date()
@@ -241,47 +330,32 @@ def main():
         
         if not st.session_state.df_hist.empty:
             dfh = st.session_state.df_hist
-            
-            # 1. Clean Data (Convert to Booleans)
             dfh['Encouragement'] = dfh['P1_Encouragement'].astype(str).str.upper() == 'TRUE'
             dfh['Report'] = dfh['P2_Report'].astype(str).str.upper() == 'TRUE'
             dfh['Prework'] = dfh['P3_Prework'].astype(str).str.upper() == 'TRUE'
             
-            # 2. Reshape Data
             chart_data = dfh.melt(
                 id_vars=['Name', 'Date_Logged'], 
                 value_vars=['Encouragement', 'Report', 'Prework'], 
                 var_name='Task', 
                 value_name='Completed'
             )
-            
-            # 3. Calculate %
             agg_data = chart_data.groupby(['Name', 'Task'])['Completed'].mean().reset_index()
             
-            # 4. Create Grouped Bar Chart with CUSTOM COLORS
             c = alt.Chart(agg_data).mark_bar().encode(
                 x=alt.X('Task', axis=None), 
                 y=alt.Y('Completed', axis=alt.Axis(format='%', title='Completion Rate')),
-                
-                # --- COLOR CHANGE IS HERE ---
                 color=alt.Color('Task', 
-                    # Define manual color range: Blue, Green, Orange
                     scale=alt.Scale(range=['#3182bd', '#e6550d', '#31a354']), 
                     legend=alt.Legend(title="Task Type", orient="bottom")
                 ),
-                
                 column=alt.Column('Name', header=alt.Header(titleOrient="bottom", labelOrient="bottom")),
                 tooltip=['Name', 'Task', alt.Tooltip('Completed', format='.0%')]
-            ).properties(
-                height=300 
-            ).configure_view(
-                stroke='transparent' 
-            )
+            ).properties(height=300).configure_view(stroke='transparent')
             
             st.altair_chart(c)
-            
         else:
-            st.info("No history logs found. Complete a cycle in the Tracker tab to see data here.")
+            st.info("No history logs found.")
 
 if __name__ == "__main__":
     main()
