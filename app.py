@@ -31,6 +31,14 @@ def load_data_from_cloud():
         sheet = client.open(SHEET_NAME).sheet1
         data = sheet.get_all_records()
         df = pd.DataFrame(data)
+        
+        # --- NEW: SORT ALPHABETICALLY ---
+        # We sort by Name, but we DO NOT reset the index.
+        # This keeps the original index (0, 1, 5, etc.) attached to the correct person.
+        # This ensures that when we update 'Row i + 2', we are updating the correct Google Sheet row.
+        if not df.empty and 'Name' in df.columns:
+            df = df.sort_values(by='Name')
+
         try:
             h_sheet = client.open(SHEET_NAME).worksheet(HISTORY_TAB_NAME)
             h_data = h_sheet.get_all_records()
@@ -50,6 +58,7 @@ def toggle_status(idx, col_name, sheet_col_idx):
     try:
         client = get_google_client()
         sheet = client.open(SHEET_NAME).sheet1
+        # idx is the DataFrame index (which matches the original row structure)
         sheet.update_cell(idx + 2, sheet_col_idx, new_val)
     except Exception as e:
         st.toast(f"⚠️ Cloud sync paused: {e}")
@@ -75,28 +84,23 @@ def update_missionary_details(idx, new_name, new_link, new_last, new_next, new_r
         st.error("Failed to sync details.")
 
 def log_and_reset(idx, name, p1, p2, p3, new_last, new_next, new_rep_day):
-    # 1. Reset active index (closes the card)
     st.session_state['active_index'] = None
     
-    # 2. Increment a reset counter to force the popover to "refresh" and close
     if 'reset_counter' not in st.session_state:
         st.session_state['reset_counter'] = 0
     st.session_state['reset_counter'] += 1
 
-    # 3. Force update UI widgets
     st.session_state[f"p1_{idx}"] = False
     st.session_state[f"p2_{idx}"] = False
     st.session_state[f"p3_{idx}"] = False
 
-    # 4. Update Local Dataframe
     st.session_state.df.at[idx, 'Last_Session_Date'] = str(new_last)
     st.session_state.df.at[idx, 'Next_Session_Date'] = str(new_next)
-    st.session_state.df.at[idx, 'Report_Day'] = str(new_rep_day) # Update Report Day
+    st.session_state.df.at[idx, 'Report_Day'] = str(new_rep_day)
     st.session_state.df.at[idx, 'P1_Sent_Encouragement'] = "FALSE"
     st.session_state.df.at[idx, 'P2_Received_Report'] = "FALSE"
     st.session_state.df.at[idx, 'P3_Sent_Prework'] = "FALSE"
     
-    # 5. Cloud Sync
     client = get_google_client()
     main_sheet = client.open(SHEET_NAME).sheet1
     hist_sheet = client.open(SHEET_NAME).worksheet(HISTORY_TAB_NAME)
@@ -107,7 +111,7 @@ def log_and_reset(idx, name, p1, p2, p3, new_last, new_next, new_rep_day):
     r = idx + 2
     main_sheet.update_cell(r, 3, str(new_last))
     main_sheet.update_cell(r, 4, str(new_next))
-    main_sheet.update_cell(r, 5, str(new_rep_day)) # Update Report Day in Sheet (Col 5)
+    main_sheet.update_cell(r, 5, str(new_rep_day))
     main_sheet.update_cell(r, 6, "FALSE")
     main_sheet.update_cell(r, 7, "FALSE")
     main_sheet.update_cell(r, 8, "FALSE")
@@ -119,7 +123,6 @@ def get_day_number(day_name):
     clean = str(day_name).strip().lower()
     return days.index(clean) if clean in days else 0
 
-# --- DATE SYNC CALLBACK ---
 def sync_next_date(i):
     if f"last_sess_input_{i}" in st.session_state:
         new_last_val = st.session_state[f"last_sess_input_{i}"]
@@ -180,6 +183,8 @@ def main():
         today = datetime.now().date()
         alerts = []
         if not st.session_state.df.empty:
+            
+            # Note: We iterate through the ALREADY SORTED dataframe here.
             for i, row in st.session_state.df.iterrows():
                 name = row['Name']
                 try:
@@ -214,14 +219,15 @@ def main():
         st.markdown("---")
 
         if not st.session_state.df.empty:
+            # Main Card Loop
             for i, row in st.session_state.df.iterrows():
                 name = row['Name']
+                
+                # Check expanded status against the INDEX (i), which stays consistent
                 is_expanded = (i == st.session_state['active_index'])
                 
                 with st.expander(f"**{name}**", expanded=is_expanded):
                     
-                    # --- FINISH SESSION BUTTON ---
-                    # We use a unique key that changes when reset_counter increments
                     popover_key = f"finish_pop_{i}_{st.session_state['reset_counter']}"
                     
                     with st.popover("✅ Finish Session (Log & Reset)", use_container_width=True):
@@ -249,7 +255,6 @@ def main():
                             key=f"next_sess_input_{i}"
                         )
                         
-                        # NEW: Update Report Day
                         days_list = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
                         current_day_idx = get_day_number(row['Report_Day'])
                         new_rep_day = st.selectbox("Report Day (Update if changed)", days_list, index=current_day_idx, key=f"rep_day_{i}")
