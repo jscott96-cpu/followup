@@ -74,7 +74,7 @@ def update_missionary_details(idx, new_name, new_link, new_last, new_next, new_r
     except:
         st.error("Failed to sync details.")
 
-def log_and_reset(idx, name, p1, p2, p3, new_last, new_next):
+def log_and_reset(idx, name, p1, p2, p3, new_last, new_next, new_rep_day):
     # 1. Reset active index (closes the card)
     st.session_state['active_index'] = None
     
@@ -91,6 +91,7 @@ def log_and_reset(idx, name, p1, p2, p3, new_last, new_next):
     # 4. Update Local Dataframe
     st.session_state.df.at[idx, 'Last_Session_Date'] = str(new_last)
     st.session_state.df.at[idx, 'Next_Session_Date'] = str(new_next)
+    st.session_state.df.at[idx, 'Report_Day'] = str(new_rep_day) # Update Report Day
     st.session_state.df.at[idx, 'P1_Sent_Encouragement'] = "FALSE"
     st.session_state.df.at[idx, 'P2_Received_Report'] = "FALSE"
     st.session_state.df.at[idx, 'P3_Sent_Prework'] = "FALSE"
@@ -106,6 +107,7 @@ def log_and_reset(idx, name, p1, p2, p3, new_last, new_next):
     r = idx + 2
     main_sheet.update_cell(r, 3, str(new_last))
     main_sheet.update_cell(r, 4, str(new_next))
+    main_sheet.update_cell(r, 5, str(new_rep_day)) # Update Report Day in Sheet (Col 5)
     main_sheet.update_cell(r, 6, "FALSE")
     main_sheet.update_cell(r, 7, "FALSE")
     main_sheet.update_cell(r, 8, "FALSE")
@@ -220,12 +222,11 @@ def main():
                     
                     # --- FINISH SESSION BUTTON ---
                     # We use a unique key that changes when reset_counter increments
-                    # This forces Streamlit to rebuild the popover, effectively closing it.
                     popover_key = f"finish_pop_{i}_{st.session_state['reset_counter']}"
                     
                     with st.popover("✅ Finish Session (Log & Reset)", use_container_width=True):
                         st.markdown("### 📝 Session Complete")
-                        st.info("Log history & reset checkboxes.")
+                        st.info("Log history, update dates & report day.")
                         
                         default_last = datetime.now().date()
                         default_next = default_last + timedelta(days=7)
@@ -248,12 +249,17 @@ def main():
                             key=f"next_sess_input_{i}"
                         )
                         
+                        # NEW: Update Report Day
+                        days_list = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                        current_day_idx = get_day_number(row['Report_Day'])
+                        new_rep_day = st.selectbox("Report Day (Update if changed)", days_list, index=current_day_idx, key=f"rep_day_{i}")
+                        
                         val_p1 = str(row['P1_Sent_Encouragement']).upper() == 'TRUE'
                         val_p2 = str(row['P2_Received_Report']).upper() == 'TRUE'
                         val_p3 = str(row['P3_Sent_Prework']).upper() == 'TRUE'
                         
                         if st.button("Confirm & Reset", key=f"conf_{i}", type="primary"):
-                            log_and_reset(i, name, val_p1, val_p2, val_p3, new_last, new_next)
+                            log_and_reset(i, name, val_p1, val_p2, val_p3, new_last, new_next, new_rep_day)
                             st.rerun()
 
                     st.divider()
