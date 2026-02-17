@@ -75,63 +75,26 @@ def update_missionary_details(idx, new_name, new_link, new_last, new_next, new_r
         st.error("Failed to sync details.")
 
 def log_and_reset(idx, name, p1, p2, p3, new_last, new_next):
+    # Reset active index so card closes after finishing session
     st.session_state['active_index'] = None
+    
     client = get_google_client()
     main_sheet = client.open(SHEET_NAME).sheet1
     hist_sheet = client.open(SHEET_NAME).worksheet(HISTORY_TAB_NAME)
     
+    # 1. Log History
     log_date = datetime.now().strftime("%Y-%m-%d")
     hist_sheet.append_row([log_date, name, str(p1), str(p2), str(p3)])
     
+    # 2. Update Dates & Reset Checkboxes
     r = idx + 2
-    main_sheet.update_cell(r, 3, str(new_last))
-    main_sheet.update_cell(r, 4, str(new_next))
-    main_sheet.update_cell(r, 6, "FALSE")
-    main_sheet.update_cell(r, 7, "FALSE")
-    main_sheet.update_cell(r, 8, "FALSE")
+    main_sheet.update_cell(r, 3, str(new_last)) # Last Session
+    main_sheet.update_cell(r, 4, str(new_next)) # Next Session
+    main_sheet.update_cell(r, 6, "FALSE")       # Reset P1
+    main_sheet.update_cell(r, 7, "FALSE")       # Reset P2
+    main_sheet.update_cell(r, 8, "FALSE")       # Reset P3
+    
     st.cache_data.clear()
-
-def process_universal_cycle():
-    client = get_google_client()
-    main_sheet = client.open(SHEET_NAME).sheet1
-    hist_sheet = client.open(SHEET_NAME).worksheet(HISTORY_TAB_NAME)
-    today = datetime.now().date()
-    processed_count = 0
-    skipped_count = 0
-    log_rows = []
-    
-    df = st.session_state.df
-    for i, row in df.iterrows():
-        name = row['Name']
-        try:
-            next_sess_date = datetime.strptime(str(row['Next_Session_Date']), "%Y-%m-%d").date()
-        except:
-            skipped_count += 1
-            continue
-
-        if today < next_sess_date:
-            skipped_count += 1
-            continue
-            
-        processed_count += 1
-        p1 = str(row['P1_Sent_Encouragement'])
-        p2 = str(row['P2_Received_Report'])
-        p3 = str(row['P3_Sent_Prework'])
-        log_rows.append([str(today), name, p1, p2, p3])
-        
-        new_last = next_sess_date
-        new_next = next_sess_date + timedelta(days=7)
-        r = i + 2
-        main_sheet.update_cell(r, 3, str(new_last))
-        main_sheet.update_cell(r, 4, str(new_next))
-        main_sheet.update_cell(r, 6, "FALSE")
-        main_sheet.update_cell(r, 7, "FALSE")
-        main_sheet.update_cell(r, 8, "FALSE")
-    
-    if log_rows:
-        for row in log_rows:
-            hist_sheet.append_row(row)
-    return processed_count, skipped_count
 
 def get_day_number(day_name):
     days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
@@ -175,19 +138,8 @@ def main():
                     st.cache_data.clear()
                     if 'df' in st.session_state: del st.session_state['df']
                     st.rerun()
-
-        # 3. Universal Reset
-        with st.expander("🔄 Weekly Batch Reset"):
-            st.caption("Checks all missionaries. If their week is finished (Today >= Next Session), it logs history and resets checkboxes.")
-            if st.button("🚀 Run Batch", type="primary"):
-                with st.spinner("Processing..."):
-                    proc, skip = process_universal_cycle()
-                st.success(f"Processed: {proc} | Skipped: {skip}")
-                time.sleep(2)
-                st.cache_data.clear()
-                st.rerun()
         
-        # 4. Refresh
+        # 3. Refresh
         st.divider()
         if st.button("🔄 Force Refresh"):
             st.cache_data.clear()
@@ -244,6 +196,34 @@ def main():
                 is_expanded = (i == st.session_state['active_index'])
                 
                 with st.expander(f"**{name}**", expanded=is_expanded):
+                    
+                    # --- FINISH SESSION BUTTON (Top of Card) ---
+                    # We prioritize this action now
+                    with st.popover("✅ Finish Session (Log & Reset)", use_container_width=True):
+                        st.markdown("### 📝 Session Complete")
+                        st.info("This will log history, reset checkboxes, and update dates.")
+                        
+                        # SMART DEFAULTS:
+                        # Default Last Session = TODAY (Since you just finished)
+                        # Default Next Session = TODAY + 7 Days
+                        default_last = datetime.now().date()
+                        default_next = default_last + timedelta(days=7)
+                        
+                        c_date1, c_date2 = st.columns(2)
+                        new_last = c_date1.date_input("Session Date (Today)", value=default_last, key=f"nl_{i}")
+                        new_next = c_date2.date_input("Next Session", value=default_next, key=f"nn_{i}")
+                        
+                        # Pass current checkbox values to the log function
+                        val_p1 = str(row['P1_Sent_Encouragement']).upper() == 'TRUE'
+                        val_p2 = str(row['P2_Received_Report']).upper() == 'TRUE'
+                        val_p3 = str(row['P3_Sent_Prework']).upper() == 'TRUE'
+                        
+                        if st.button("Confirm & Reset", key=f"conf_{i}", type="primary"):
+                            log_and_reset(i, name, val_p1, val_p2, val_p3, new_last, new_next)
+                            st.rerun()
+
+                    st.divider()
+
                     c1, c2 = st.columns([3, 1])
                     with c1:
                         val_p1 = str(row['P1_Sent_Encouragement']).upper() == 'TRUE'
@@ -262,17 +242,7 @@ def main():
                         if row['Chat_Link']:
                             st.link_button("Chat", row['Chat_Link'])
                     
-                    st.markdown("---")
-                    
-                    with st.popover("🔄 Finish Cycle (Manual)"):
-                        st.caption("Log history & reset checkboxes")
-                        try: d_def = datetime.strptime(str(row['Next_Session_Date']), "%Y-%m-%d").date()
-                        except: d_def = datetime.now().date()
-                        nl = st.date_input("New 'Last Session'", value=d_def, key=f"nl_{i}")
-                        nn = st.date_input("New 'Next Session'", value=d_def + timedelta(days=7), key=f"nn_{i}")
-                        if st.button("✅ Log & Reset", key=f"lr_{i}", type="primary"):
-                            log_and_reset(i, name, val_p1, val_p2, val_p3, nl, nn)
-                            st.rerun()
+                    st.divider()
 
                     with st.expander("✏️ Edit Details"):
                         with st.form(f"edit_{i}"):
