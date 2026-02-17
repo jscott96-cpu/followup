@@ -75,7 +75,23 @@ def update_missionary_details(idx, new_name, new_link, new_last, new_next, new_r
         st.error("Failed to sync details.")
 
 def log_and_reset(idx, name, p1, p2, p3, new_last, new_next):
+    # 1. Reset active index so card closes
     st.session_state['active_index'] = None
+    
+    # 2. FORCE UPDATE UI WIDGETS (This fixes the "Not Clearing" bug)
+    # We explicitly tell Streamlit: "These boxes are now False"
+    st.session_state[f"p1_{idx}"] = False
+    st.session_state[f"p2_{idx}"] = False
+    st.session_state[f"p3_{idx}"] = False
+
+    # 3. Update Local Dataframe (So it looks correct immediately)
+    st.session_state.df.at[idx, 'Last_Session_Date'] = str(new_last)
+    st.session_state.df.at[idx, 'Next_Session_Date'] = str(new_next)
+    st.session_state.df.at[idx, 'P1_Sent_Encouragement'] = "FALSE"
+    st.session_state.df.at[idx, 'P2_Received_Report'] = "FALSE"
+    st.session_state.df.at[idx, 'P3_Sent_Prework'] = "FALSE"
+    
+    # 4. Cloud Sync
     client = get_google_client()
     main_sheet = client.open(SHEET_NAME).sheet1
     hist_sheet = client.open(SHEET_NAME).worksheet(HISTORY_TAB_NAME)
@@ -89,6 +105,7 @@ def log_and_reset(idx, name, p1, p2, p3, new_last, new_next):
     main_sheet.update_cell(r, 6, "FALSE")
     main_sheet.update_cell(r, 7, "FALSE")
     main_sheet.update_cell(r, 8, "FALSE")
+    
     st.cache_data.clear()
 
 def get_day_number(day_name):
@@ -97,14 +114,11 @@ def get_day_number(day_name):
     return days.index(clean) if clean in days else 0
 
 # --- DATE SYNC CALLBACK ---
-# This function runs every time you change the 'Session Date'
 def sync_next_date(i):
-    # Get the new date from session state
-    new_last_val = st.session_state[f"last_sess_input_{i}"]
-    # Calculate +7 days
-    new_next_val = new_last_val + timedelta(days=7)
-    # Update the Next Session input
-    st.session_state[f"next_sess_input_{i}"] = new_next_val
+    if f"last_sess_input_{i}" in st.session_state:
+        new_last_val = st.session_state[f"last_sess_input_{i}"]
+        new_next_val = new_last_val + timedelta(days=7)
+        st.session_state[f"next_sess_input_{i}"] = new_next_val
 
 # --- MAIN APP ---
 def main():
@@ -198,16 +212,15 @@ def main():
                 
                 with st.expander(f"**{name}**", expanded=is_expanded):
                     
-                    # --- FINISH SESSION BUTTON (Top of Card) ---
+                    # --- FINISH SESSION BUTTON ---
                     with st.popover("✅ Finish Session (Log & Reset)", use_container_width=True):
                         st.markdown("### 📝 Session Complete")
                         st.info("Log history & reset checkboxes.")
                         
-                        # Initialize defaults
                         default_last = datetime.now().date()
                         default_next = default_last + timedelta(days=7)
                         
-                        # Initialize Session State values if not present
+                        # Initialize keys if missing
                         if f"last_sess_input_{i}" not in st.session_state:
                             st.session_state[f"last_sess_input_{i}"] = default_last
                         if f"next_sess_input_{i}" not in st.session_state:
@@ -215,15 +228,12 @@ def main():
                         
                         c_date1, c_date2 = st.columns(2)
                         
-                        # INPUT 1: Last Session (Triggers Callback)
                         new_last = c_date1.date_input(
                             "Session Date (Today)", 
                             key=f"last_sess_input_{i}", 
                             on_change=sync_next_date, 
                             args=(i,)
                         )
-                        
-                        # INPUT 2: Next Session (Updated by Callback)
                         new_next = c_date2.date_input(
                             "Next Session", 
                             key=f"next_sess_input_{i}"
