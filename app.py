@@ -75,31 +75,36 @@ def update_missionary_details(idx, new_name, new_link, new_last, new_next, new_r
         st.error("Failed to sync details.")
 
 def log_and_reset(idx, name, p1, p2, p3, new_last, new_next):
-    # Reset active index so card closes after finishing session
     st.session_state['active_index'] = None
-    
     client = get_google_client()
     main_sheet = client.open(SHEET_NAME).sheet1
     hist_sheet = client.open(SHEET_NAME).worksheet(HISTORY_TAB_NAME)
     
-    # 1. Log History
     log_date = datetime.now().strftime("%Y-%m-%d")
     hist_sheet.append_row([log_date, name, str(p1), str(p2), str(p3)])
     
-    # 2. Update Dates & Reset Checkboxes
     r = idx + 2
-    main_sheet.update_cell(r, 3, str(new_last)) # Last Session
-    main_sheet.update_cell(r, 4, str(new_next)) # Next Session
-    main_sheet.update_cell(r, 6, "FALSE")       # Reset P1
-    main_sheet.update_cell(r, 7, "FALSE")       # Reset P2
-    main_sheet.update_cell(r, 8, "FALSE")       # Reset P3
-    
+    main_sheet.update_cell(r, 3, str(new_last))
+    main_sheet.update_cell(r, 4, str(new_next))
+    main_sheet.update_cell(r, 6, "FALSE")
+    main_sheet.update_cell(r, 7, "FALSE")
+    main_sheet.update_cell(r, 8, "FALSE")
     st.cache_data.clear()
 
 def get_day_number(day_name):
     days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
     clean = str(day_name).strip().lower()
     return days.index(clean) if clean in days else 0
+
+# --- DATE SYNC CALLBACK ---
+# This function runs every time you change the 'Session Date'
+def sync_next_date(i):
+    # Get the new date from session state
+    new_last_val = st.session_state[f"last_sess_input_{i}"]
+    # Calculate +7 days
+    new_next_val = new_last_val + timedelta(days=7)
+    # Update the Next Session input
+    st.session_state[f"next_sess_input_{i}"] = new_next_val
 
 # --- MAIN APP ---
 def main():
@@ -117,12 +122,9 @@ def main():
     # ==========================
     with st.sidebar:
         st.title("🧭 Menu")
-        
-        # 1. Page Selection
         page = st.radio("Go to:", ["Tracker", "Trends & History"])
         st.divider()
 
-        # 2. Add Missionary
         with st.expander("➕ Add Missionary"):
             with st.form("add_sidebar"):
                 n_name = st.text_input("Name")
@@ -139,7 +141,6 @@ def main():
                     if 'df' in st.session_state: del st.session_state['df']
                     st.rerun()
         
-        # 3. Refresh
         st.divider()
         if st.button("🔄 Force Refresh"):
             st.cache_data.clear()
@@ -198,22 +199,36 @@ def main():
                 with st.expander(f"**{name}**", expanded=is_expanded):
                     
                     # --- FINISH SESSION BUTTON (Top of Card) ---
-                    # We prioritize this action now
                     with st.popover("✅ Finish Session (Log & Reset)", use_container_width=True):
                         st.markdown("### 📝 Session Complete")
-                        st.info("This will log history, reset checkboxes, and update dates.")
+                        st.info("Log history & reset checkboxes.")
                         
-                        # SMART DEFAULTS:
-                        # Default Last Session = TODAY (Since you just finished)
-                        # Default Next Session = TODAY + 7 Days
+                        # Initialize defaults
                         default_last = datetime.now().date()
                         default_next = default_last + timedelta(days=7)
                         
-                        c_date1, c_date2 = st.columns(2)
-                        new_last = c_date1.date_input("Session Date (Today)", value=default_last, key=f"nl_{i}")
-                        new_next = c_date2.date_input("Next Session", value=default_next, key=f"nn_{i}")
+                        # Initialize Session State values if not present
+                        if f"last_sess_input_{i}" not in st.session_state:
+                            st.session_state[f"last_sess_input_{i}"] = default_last
+                        if f"next_sess_input_{i}" not in st.session_state:
+                            st.session_state[f"next_sess_input_{i}"] = default_next
                         
-                        # Pass current checkbox values to the log function
+                        c_date1, c_date2 = st.columns(2)
+                        
+                        # INPUT 1: Last Session (Triggers Callback)
+                        new_last = c_date1.date_input(
+                            "Session Date (Today)", 
+                            key=f"last_sess_input_{i}", 
+                            on_change=sync_next_date, 
+                            args=(i,)
+                        )
+                        
+                        # INPUT 2: Next Session (Updated by Callback)
+                        new_next = c_date2.date_input(
+                            "Next Session", 
+                            key=f"next_sess_input_{i}"
+                        )
+                        
                         val_p1 = str(row['P1_Sent_Encouragement']).upper() == 'TRUE'
                         val_p2 = str(row['P2_Received_Report']).upper() == 'TRUE'
                         val_p3 = str(row['P3_Sent_Prework']).upper() == 'TRUE'
