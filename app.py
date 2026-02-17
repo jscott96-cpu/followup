@@ -75,23 +75,27 @@ def update_missionary_details(idx, new_name, new_link, new_last, new_next, new_r
         st.error("Failed to sync details.")
 
 def log_and_reset(idx, name, p1, p2, p3, new_last, new_next):
-    # 1. Reset active index so card closes
+    # 1. Reset active index (closes the card)
     st.session_state['active_index'] = None
     
-    # 2. FORCE UPDATE UI WIDGETS (This fixes the "Not Clearing" bug)
-    # We explicitly tell Streamlit: "These boxes are now False"
+    # 2. Increment a reset counter to force the popover to "refresh" and close
+    if 'reset_counter' not in st.session_state:
+        st.session_state['reset_counter'] = 0
+    st.session_state['reset_counter'] += 1
+
+    # 3. Force update UI widgets
     st.session_state[f"p1_{idx}"] = False
     st.session_state[f"p2_{idx}"] = False
     st.session_state[f"p3_{idx}"] = False
 
-    # 3. Update Local Dataframe (So it looks correct immediately)
+    # 4. Update Local Dataframe
     st.session_state.df.at[idx, 'Last_Session_Date'] = str(new_last)
     st.session_state.df.at[idx, 'Next_Session_Date'] = str(new_next)
     st.session_state.df.at[idx, 'P1_Sent_Encouragement'] = "FALSE"
     st.session_state.df.at[idx, 'P2_Received_Report'] = "FALSE"
     st.session_state.df.at[idx, 'P3_Sent_Prework'] = "FALSE"
     
-    # 4. Cloud Sync
+    # 5. Cloud Sync
     client = get_google_client()
     main_sheet = client.open(SHEET_NAME).sheet1
     hist_sheet = client.open(SHEET_NAME).worksheet(HISTORY_TAB_NAME)
@@ -130,6 +134,8 @@ def main():
         st.session_state.df_hist = df_hist
     if 'active_index' not in st.session_state:
         st.session_state['active_index'] = None
+    if 'reset_counter' not in st.session_state:
+        st.session_state['reset_counter'] = 0
 
     # ==========================
     # 📱 SIDEBAR NAVIGATION
@@ -213,6 +219,10 @@ def main():
                 with st.expander(f"**{name}**", expanded=is_expanded):
                     
                     # --- FINISH SESSION BUTTON ---
+                    # We use a unique key that changes when reset_counter increments
+                    # This forces Streamlit to rebuild the popover, effectively closing it.
+                    popover_key = f"finish_pop_{i}_{st.session_state['reset_counter']}"
+                    
                     with st.popover("✅ Finish Session (Log & Reset)", use_container_width=True):
                         st.markdown("### 📝 Session Complete")
                         st.info("Log history & reset checkboxes.")
@@ -220,7 +230,6 @@ def main():
                         default_last = datetime.now().date()
                         default_next = default_last + timedelta(days=7)
                         
-                        # Initialize keys if missing
                         if f"last_sess_input_{i}" not in st.session_state:
                             st.session_state[f"last_sess_input_{i}"] = default_last
                         if f"next_sess_input_{i}" not in st.session_state:
